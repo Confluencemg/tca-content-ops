@@ -50,8 +50,8 @@ These apply to every routine in the system. New routines must follow these.
 
 | | |
 |---|---|
-| **Status** | Built — not yet scheduled. Awaiting first test run. |
-| **Schedule** | Daily, 8:30 AM ET (cron `30 12 * * *` UTC during EDT) — NOT YET ENABLED. Schedule activates after first manual test run succeeds. |
+| **Status** | Active (first scheduled run 2026-05-02 8:30 AM ET) |
+| **Schedule** | Daily, 8:30 AM ET (cron `30 12 * * *` UTC during EDT) |
 | **Routine ID** | `trig_01PkF6xmX9d1mU6yHc4qvknP` |
 | **Environment ID** | `env_01UiKj8r6fjAb2fUusvoLKk1` (TCA Daily Task) |
 | **Source file** | `routines/social-distribute.md` |
