@@ -50,9 +50,10 @@ These apply to every routine in the system. New routines must follow these.
 
 | | |
 |---|---|
-| **Status** | Spec committed — routine not yet created (awaiting Phase 2 of build) |
+| **Status** | Built — not yet scheduled. Awaiting first test run. |
 | **Schedule** | Daily, 8:30 AM ET (cron `30 12 * * *` UTC during EDT) — NOT YET ENABLED. Schedule activates after first manual test run succeeds. |
-| **Routine ID** | TBD |
+| **Routine ID** | `trig_01PkF6xmX9d1mU6yHc4qvknP` |
+| **Environment ID** | `env_01UiKj8r6fjAb2fUusvoLKk1` (TCA Daily Task) |
 | **Source file** | `routines/social-distribute.md` |
 | **Connectors** | Notion only (GHL Social Planner calls go via HTTPS to `services.leadconnectorhq.com` with vault credentials) |
 | **Allowed tools** | Bash, Read, Write, Edit, Glob, Grep, WebFetch |
