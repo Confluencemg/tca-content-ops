@@ -1,6 +1,6 @@
 # Routine: daily-blog-publish
 
-**Trigger:** Cron, daily at 2:30am Eastern (`30 2 * * *`)
+**Trigger:** Cron, daily at 2:30am Eastern (`30 6 * * *` UTC during EDT — CCR cron is UTC, not local)
 **Runtime budget:** ~30 minutes
 **Output:** One scheduled WordPress post live at 8:00am, 2–3 images generated, social hooks extracted, Notion log row
 
