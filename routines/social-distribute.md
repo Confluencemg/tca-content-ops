@@ -1,332 +1,349 @@
-# Routine: daily-social-distribute
+# daily-social-distribute
 
-**Trigger:** Cron, daily at 8:30am Eastern (`30 8 * * *`) — 30 minutes after blog goes live
-**Runtime budget:** ~30 minutes
-**Output:** Platform-native social posts published or scheduled across Facebook, Instagram (feed + carousel), LinkedIn, and Pinterest. Engagement-first content calibrated per platform's algorithm reality.
+**Schedule:** Daily 8:30 AM ET (cron `30 12 * * *` UTC during EDT, `30 13 * * *` UTC during EST)
+**Environment:** TCA Daily Task (`env_01UiKj8r6fjAb2fUusvoLKk1`) — full network access required
+**Connectors:** Notion MCP only. GHL is hit via raw HTTP (services.leadconnectorhq.com).
+**Routine ID:** TBD (set on creation)
 
----
+## Purpose
 
-## Mission
+Adapt yesterday's published blog post into platform-native social copy for Facebook, Instagram, LinkedIn, and Pinterest, then schedule the posts via the GHL Social Planner API. Pinterest pin #1 publishes today; pins #2–5 get queued across the next 4 days against the same blog URL with varied copy and creative.
 
-Take today's blog content and produce **engagement-worthy native posts** for each platform. Each platform has different rules — what works on LinkedIn fails on Instagram and vice versa. The routine respects this.
+This routine **only schedules**. It does not publish immediately. Every API call sets `status: "scheduled"` and a future `scheduleDate`. Publishing is GHL's job, on the schedule we set.
 
-The routine reads `logs/<date>-social-hooks.md` (produced by the blog routine) rather than re-analyzing the full post. This keeps blog and social tightly aligned and saves tokens.
+## Why this routine exists separately from `daily-blog-publish`
 
----
+Blog publishes at 8 AM ET. Distribution runs at 8:30 AM ET so:
+- The blog post is already live (in case any social copy references the URL or excerpt)
+- The social hooks file from yesterday (`logs/{YYYY-MM-DD}-social-hooks.md`) is committed
+- Failures in distribution don't block the next morning's blog post
 
-## Step 0 — Load TCA skills (mandatory)
-
-Before generating any content, load:
-- **`tca-social-media-standards`** — defines per-platform standards, content types, frequencies, visual rules, copy rules, hashtag rules, quality gates. Replaces the older `social-media-content-standards` skill. Brand palette + Pinterest section + per-platform link strategy all live here.
-- **`tca-compliance-check`** — for any social post touching financial topics. Load now, invoke per platform post in Step 8 before scheduling.
-- `marketing-psychology` — engagement framing
-- `copywriting` — headlines and CTAs
-- `gpt-image-2-director` — for all image and carousel slide prompts
-
-If `tca-social-media-standards` or `tca-compliance-check` fails to load: log Critical, stop the routine. Do not publish without standards or compliance check.
-If other skills fail: log High-priority, proceed with built-in defaults from this file.
-
----
-
-## The per-platform link/no-link strategy (research-backed)
-
-Different platforms penalize external links very differently. The routine respects this rather than applying one rule everywhere.
-
-### Facebook
-- **Default: link in 2 posts per week, standalone 3 per week**
-- Reach is already low (~1.65% of followers). Links don't get aggressively penalized but don't get pushed either.
-- The smart play: use standalone days to build the algorithm signal that this Page is worth showing, so when link days fire they reach a warmer audience.
-- Every link post must deliver value in-feed before the link — first 2 lines must hook before the "see more" cutoff
-- Standalone days lean into shareability — content people want to send to a friend
-- Suggested cadence: link Mon + Wed, standalone Tue + Thu + Fri (adjust if `content-calendar.md` overrides)
-
-### LinkedIn
-- **Default: link in 1–2 posts per week, standalone 3–4 per week**
-- LinkedIn applies an estimated ~60% reach penalty to posts with external links. Putting links in the first comment is also detected.
-- Most days, deliver the full insight natively in the post. Standalone is the default mode.
-- Link days are reserved for posts where the blog genuinely adds depth the LinkedIn post can't (long charts, downloadable resources, full case studies)
-- For link days: include the link in body, not as comment
-
-### Instagram (feed)
-- **Default: every day works — link/no-link distinction is mostly irrelevant**
-- Links live in bio, not in posts, so there's no platform penalty either way
-- What matters: shareability (DM shares weight 3-5x higher than likes), watch time, save-worthiness
-- Caption strategy: deliver the value, mention "link in bio" if the blog deepens the topic, otherwise just let the post stand alone
-
-### Instagram (carousel)
-- **Default: every weekday gets a carousel** — IG carousels are the highest-engagement format on the platform (1.92% vs 1.74% Reels vs 1.26% photo)
-- 8–10 slides is the sweet spot (peak reach observed around slide 13 for longer sequences)
-- Aspect ratio: 1080×1350 (4:5 portrait) — NOT 1080×1080 square. Portrait dominates mobile screen real estate.
-- Last slide is the CTA: "save this for later" or "link in bio for the full breakdown"
-
-### Pinterest
-- **Default: every pin links — that's the entire point of Pinterest**
-- Pinterest is a search engine, not a social network. Pin = traffic vehicle.
-- Generate 5 distinct pin designs per blog post (top 1% of pins drive 50%+ of traffic — design variety is how you increase odds of one going viral)
-- Aspect ratio: 1000×1500 (2:3) — Pinterest's algorithm penalizes other ratios
-- **Critical rule:** wait at least 24 hours between pins to the same URL. Never publish all 5 pins to the same URL on the same day — triggers spam filters.
-- The routine schedules one pin today, then queues the other 4 across the next 4 days
+If yesterday's blog publish failed, this routine exits clean — there is no content to distribute.
 
 ---
 
 ## Step-by-step
 
-### 1. Read today's social hooks file
+### 0. Load TCA skills (mandatory first step)
 
-Read `logs/<date>-social-hooks.md` from the repo. Contains:
-- Lead insight (strongest standalone takeaway)
-- Secondary insights (for IG slides and standalone posts)
-- Contrarian angle (if any)
-- Carousel arc (8–10 beats — note the updated count)
-- Pinterest pin angles (5 distinct framings)
+Before doing anything else, load:
+- **`tca-social-media-standards`** — authoritative for per-platform content types, copy register, hashtag rules, visual standards. This skill internally loads `tca-compliance-check` for any post touching financial topics.
+- `gpt-image-2-director` — for Pinterest pin image generation (only if pin images need to be generated fresh; if reusing the blog hero image, skip)
 
-If the file doesn't exist: blog routine likely failed. Log to Notion as Medium priority. Do not invent content. Exit cleanly.
+If `tca-social-media-standards` won't load: log to Notion as Critical Tech task, **stop**. Do not attempt distribution without the skill — voice and platform-fit drift will result.
 
-### 2. Determine today's per-platform mix
+### 1. Vault fetch (credentials)
 
-Use the rules above. Override only if `content-calendar.md` specifies otherwise (e.g., big launch day, force all platforms to link).
+Fetch from Notion vault page `Routine Vault — Credentials` (page ID `3533d750-f142-8149-8daf-fea08f6969a2`):
 
-### 3. Generate Facebook post
+- `GHL_API_KEY` — Private Integration Token
+- `GHL_LOCATION_ID` — `v8Ywxi0TTOF3T77DAD3c` (TCA sub-account)
+- `GHL_USER_ID` — required on every create call
+- `GHL_FB_ACCOUNT_ID`
+- `GHL_IG_ACCOUNT_ID`
+- `GHL_LI_ACCOUNT_ID`
+- `GHL_PIN_ACCOUNT_ID`
+- `GHL_PIN_OAUTH_ID` — first segment of the Pinterest account ID, used as map key in `boardIds`
+- `GHL_PIN_BOARD_ID_SOCIAL_SECURITY` — Social Security Strategy board
+- `GHL_PIN_BOARD_ID_RETIREMENT` — Retirement Planning Essentials board
+- `GHL_PIN_BOARD_ID_MARKETS` — Money Mindset & Markets board
+- `GHL_PIN_BOARD_ID_FAMILY_FINANCIAL` — Family Financial Organization board (default fallback)
+- `GHL_PIN_BOARD_ID_TAX_SMART_RETIREMENT` — Tax-Smart Retirement board
 
-**Length:** 100–250 words.
+If any required credential is missing, exit clean and log Critical to Operations Hub. Do not proceed with partial credentials.
 
-**Structure:**
-- Open with the lead insight from the hooks file. First 2 lines must hook before the "see more" cutoff (~80 chars on mobile).
-- 1–2 paragraphs developing the idea
-- If link day: end with one line ("Full breakdown here") + URL
-- If standalone day: end with engagement prompt — no link
-- No hashtags (FB doesn't reward them)
+**Never log token values.** Token only appears in the `Authorization: Bearer` header.
 
-### 4. Generate LinkedIn post
+### 2. Repo clone
 
-**Length:** 200–500 words. LinkedIn rewards substance and dwell time.
+Clone or pull latest `main` from `github.com/Confluencemg/tca-content-ops` to a working directory.
 
-**Structure:**
-- Strong opener — ideally a contrarian or specific claim. Use the contrarian angle from the hooks file if present.
-- Short paragraphs, 1–3 sentences each (mobile readability)
-- Professional tone but recognizably Thomas — direct, opinionated, specific
-- 1–3 hashtags max at the end (more than 5 triggers spam signals)
-- If link day: include link in body text (not in comment — that workaround is now also penalized)
-- If standalone day: end with a question that invites real responses
+### 3. Locate yesterday's artifacts
 
-Schedule for 10:00am Eastern.
+Compute yesterday's date in ET (not UTC — the blog's filename convention is local-day-based).
 
-### 5. Generate Instagram feed caption
+Required files:
+- `logs/{YYYY-MM-DD}-social-hooks.md` — must exist and be non-empty
+- The corresponding WP post URL, title, excerpt, and featured image URL — fetched via WP REST API filtering by date
 
-**Length:** 150–300 words.
+**Fail closed:**
+- If the social hooks file is missing → exit clean, log Low/Admin task to Operations Hub noting that yesterday's blog publish probably failed (which has its own task already).
+- If the WP post can't be located → exit clean, same logging pattern.
 
-**Structure:**
-- Hook line (first line, before the "more" cutoff at 125 characters)
-- Line break
-- Develop in short paragraphs, 1–3 sentences each, with line breaks
-- Conversational, more personal than FB
-- Keyword-rich (IG SEO matters more than hashtags now)
-- 5–10 hashtags at end (mix broad + specific) — for categorization, not discovery
-- "Link in bio" callout at end — Linktree manages the actual landing
+Do **not** distribute without both artifacts.
 
-**Image:** 1080×1350 portrait (4:5) for IG feed.
+### 4. Adapt to platform-native copy
 
-**Check `inbox/ig-feed-images/` first.** If a sidecar matches by `use_with_post_slug` or `topic`/`category`, use that image. Move to `inbox/used/<YYYY-MM>/` after upload. If no match, generate via GPT Image 2.
+For each platform, generate copy per the `tca-social-media-standards` skill. The social hooks file from yesterday already contains:
+- Lead insight
+- Secondary insights
+- Contrarian angle
+- 8-slide carousel arc
+- 5 Pinterest pin angles
 
-### 6. Generate the IG carousel (the engagement workhorse)
+Use those as input. Do not invent new angles — the hooks file is the source of truth.
 
-**Slide count:** 8–10 slides (sweet spot per 2026 IG algorithm data).
+**Per-platform output specs:**
 
-**Aspect ratio:** 1080×1350 (4:5 portrait) for every slide.
+#### Facebook
+- Format: feed post with link preview to blog URL
+- Body: 1–3 sentence hook from the social hooks file's lead insight, then a CTA driving to the blog
+- Character target: ≤500 (well under the 62,000 ceiling)
+- Follow-up comment: a one-line engagement question tied to the post's topic
 
-**Carousel principles:**
-- Slide 1 must stop the scroll. Strong visual + ≤12 word headline.
-- Each slide delivers one idea. Don't crowd.
-- Visual consistency across all slides — same brand palette, typography, layout grid.
-- Slides 2 through N-1: build, support, develop the idea
-- Final slide is the CTA: "save this for later" + brand mark, or "link in bio for full breakdown" if it's a link day
-- Total reading time across all slides: 30–60 seconds
+#### Instagram
+- Format: single feed image (NOT carousel — carousel is a separate future routine)
+- Image: ALWAYS generate a fresh 1:1 (1080×1080) image via GPT Image 2 using the blog topic and hook as the prompt input. Do not attempt to crop the WP featured image — most blog heroes are 16:9 or 3:2 and forced cropping loses the focal point. Image gen is one API call per day; that cost is acceptable.
+- Caption: hook + value bullet line + CTA + hashtags
+- Hashtags: 5–8 relevant tags from the standards skill's TCA hashtag list
+- Character target: ≤2,200 (Instagram's hard limit)
+- Follow-up comment: "Link in bio for the full breakdown: {blog URL}" (Instagram strips clickable links from captions — this directs hand-typing users)
 
-**Generation pipeline for each carousel:**
+#### LinkedIn
+- Format: long-form native text post (NOT a link post — LinkedIn algorithm penalizes link posts)
+- **Target length: 1,300–1,600 characters** (≈220–280 words). This is the empirically-validated engagement sweet spot for 2026 — long enough to deliver substance, short enough to fit the 30–45 second dwell time the algorithm rewards. Do not exceed 2,000 chars; completion rate falls off above that. Hard ceiling: 3,000 chars (LinkedIn limit).
+- **Mandatory structure:**
+  1. **Hook (first ~200 chars)** — must contain the insight or contradiction. The first 200 chars are the only thing visible before "see more" truncation. No throat-clearing, no "I want to share..." preamble.
+  2. **Body (3–5 short paragraphs)** — 1–2 sentences each, with white space between every paragraph. No walls of text. Single-line paragraphs for emphasis are fine.
+  3. **Insight payoff** — deliver the takeaway explicitly. Don't bury it.
+  4. **Closing question (last 100–200 chars)** — specific and answerable. Drives comments, which drive algorithmic distribution more than likes or shares.
+- No URL in the body
+- Follow-up comment: "Read the full breakdown: {blog URL}" (this is the standard LinkedIn pattern — link goes in the first comment, not the post body)
 
-**First: check `inbox/ig-carousels/` for a pre-made carousel set matching today's post.**
+#### Pinterest pin #1 (today)
+- Image: vertical 2:3 (1000×1500) — either the blog hero re-cropped or a fresh pin generated via GPT Image 2
+- Title: ≤100 chars, SEO-keyword-led, distinct from the blog title
+- Description: ≤500 chars, hook + value statement + soft keyword inclusion
+- Destination URL: the blog post URL
+- Board: select per pillar mapping in step 4a below
 
-A carousel set is a subfolder (e.g., `inbox/ig-carousels/bucket-planning-101/`) containing slide images named `slide-1.png` through `slide-N.png` plus a `set.json` sidecar describing the set:
+### 4a. Pinterest board mapping
 
+Pillar → board (vault keys, captured 2026-05-01):
+
+| Pillar | Vault Key | Board Name |
+|---|---|---|
+| Social Security | `GHL_PIN_BOARD_ID_SOCIAL_SECURITY` | Social Security Strategy |
+| Retirement Planning | `GHL_PIN_BOARD_ID_RETIREMENT` | Retirement Planning Essentials |
+| Bucket Planning | `GHL_PIN_BOARD_ID_RETIREMENT` | (shares the Retirement board) |
+| Market Insights | `GHL_PIN_BOARD_ID_MARKETS` | Money Mindset & Markets |
+| Trading & Markets | `GHL_PIN_BOARD_ID_MARKETS` | (shares the Markets board) |
+| Financial Education | `GHL_PIN_BOARD_ID_FAMILY_FINANCIAL` | Family Financial Organization |
+| Tax-related content | `GHL_PIN_BOARD_ID_TAX_SMART_RETIREMENT` | Tax-Smart Retirement |
+
+If the post's pillar doesn't map cleanly to one of these (e.g., a content piece spans multiple pillars), default to `GHL_PIN_BOARD_ID_FAMILY_FINANCIAL` as the most general fit.
+
+For the 5-pin queue (pin #1 today + pins #2–5 across the next 4 days), pin #1 goes to the primary pillar board. Pins #2–5 should rotate across **2–3 different boards** where the topic genuinely fits, not just the same board 5 times. This prevents Pinterest from flagging duplicate-board behavior and improves discoverability across multiple board contexts. Example: a Social Security post might pin to Social Security Strategy (pin #1), Retirement Planning Essentials (pin #2), Tax-Smart Retirement (pin #3), Family Financial Organization (pin #4), Social Security Strategy again with different creative (pin #5).
+
+### 5. Compliance pass
+
+Run `tca-compliance-check` against all four primary posts and all five Pinterest pins (pin #1 plus #2–5).
+
+- Tier 1 issues (e.g., performance promises, implied advisory relationship, missing required disclosure on a triggered post) → **fail closed**, do not schedule, log Critical task.
+- Tier 2 issues → auto-fix and continue.
+- Pass → continue.
+
+Note: routine social posts do **not** require the standard footer disclaimer per the standards skill. Profile-level disclosure suffices. Inline disclosure is only required for testimonials, performance claims, third-party ratings, or product comparisons — and the compliance check is what flags those.
+
+### 6. Image preparation
+
+For each platform that needs an image (FB, IG, Pinterest):
+
+1. If reusing WP featured image: fetch the image URL directly. No upload needed — GHL accepts external URLs.
+2. If generating fresh: use GPT Image 2 via `gpt-image-2-director` skill, save to a public-accessible URL (WP media library or a CDN). Capture the MIME type from the generation step.
+3. **Verify MIME type**: GHL requires `media[].type` to be a MIME type (`image/png`, `image/jpeg`), NOT a category like `image`. Default to `image/png` for GPT Image 2 output, `image/jpeg` for WP photo images.
+4. **Verify size limits**: FB 10MB, IG 8MB, LinkedIn 8MB, Pinterest 10MB.
+
+If image prep fails for one platform, post text-only on platforms that allow it (FB, LinkedIn) and skip IG/Pinterest with logged warnings. Do not block the whole distribution on one platform's image issue.
+
+### 7. Schedule posts via GHL API
+
+For each platform, `POST /social-media-posting/{locationId}/posts` with the platform-specific request body.
+
+**Hard requirements on every call (safety interlocks):**
+
+```javascript
+// Pre-flight validation — refuse to call API if any of these fail
+assert(body.status === "scheduled");
+assert(body.scheduleDate.endsWith("Z")); // UTC ISO 8601
+assert(new Date(body.scheduleDate) > new Date(Date.now() + 5 * 60 * 1000)); // ≥5 min out
+assert(body.userId);
+assert(Array.isArray(body.accountIds) && body.accountIds.length > 0);
+```
+
+Any assertion fails → log Critical, exit. Do not POST. The `status: "scheduled"` check is non-negotiable — without it, the post publishes immediately and creates the same kind of rogue post we hit during the API surface test.
+
+**Schedule times (all converted to UTC ISO 8601 with Z suffix before sending):**
+
+| Platform | Local time (ET) | Notes |
+|---|---|---|
+| LinkedIn | 7:30 AM | Highest engagement window for B2B finance content |
+| Facebook | 9:00 AM | After commute, before mid-morning lull |
+| Instagram | 11:00 AM | Late-morning scroll window |
+| Pinterest pin #1 | 8:00 PM | Pinterest evening pattern |
+| Pinterest pin #2 | tomorrow 8:00 PM | |
+| Pinterest pin #3 | +2 days 8:00 PM | |
+| Pinterest pin #4 | +3 days 8:00 PM | |
+| Pinterest pin #5 | +4 days 8:00 PM | |
+
+**Per-platform body shape (confirmed via API surface test 2026-05-01 — see `docs/ghl-api-findings.md` for full schema):**
+
+#### Facebook
 ```json
 {
-  "type": "ig_carousel",
-  "topic": "bucket planning basics",
-  "category": "Bucket Planning",
-  "use_with_post_slug": null,
-  "slide_count": 9,
-  "caption_draft": "<optional pre-written caption>"
+  "accountIds": ["{GHL_FB_ACCOUNT_ID}"],
+  "userId": "{GHL_USER_ID}",
+  "summary": "{facebook copy}",
+  "scheduleDate": "{utc_iso_8601_z}",
+  "status": "scheduled",
+  "type": "post",
+  "media": [{"url": "{image_url}", "type": "image/jpeg"}],
+  "followUpComment": "{engagement question}"
 }
 ```
 
-If a matching set exists: use those slides directly. Use `caption_draft` if present, otherwise generate the caption per the rules below. Move the entire subfolder to `inbox/used/<YYYY-MM>/` after publishing.
-
-**If no matching set in inbox, generate fresh:**
-
-For each of the 8–10 slides in the carousel arc from the hooks file:
-1. Compose the slide text (matching slide's role — hook, build, insight, example, payoff, action, CTA)
-2. Build a structured GPT Image 2 prompt using the carousel template in `assets/image-prompts/gpt-image-2-style-guide.md`
-3. Generate the slide image at 1080×1350 with slide text as text overlay (GPT Image 2 handles text rendering well — this is exactly its strength)
-4. Save to temp directory: `slide-1.png` through `slide-N.png`
-
-**Brand consistency rules for carousels:**
-- Same background treatment across all slides in a single carousel
-- Same font family, same text positioning template
-- Slide 1 may have a slightly different layout (it's the hook) but slides 2–N must match
-- Brand mark (small TCA monogram or wordmark) on every slide in the same position
-- No stock-photo-with-text-slapped-on. Designed-feeling, not generated-feeling.
-
-**Generate the carousel caption** (separate from the slides):
-- 100–200 words
-- Tells the reader what the carousel covers and why it's worth swiping through
-- Reinforces the lead insight
-- 5–10 hashtags
-- Save-worthy framing ("Save this for the next time you…") — saves are a top algorithm signal
-
-**Post the carousel:** Upload all slides via Meta Graph API as a carousel post with the caption. Schedule for ~2:00pm Eastern.
-
-### 7. Generate and schedule Pinterest pins
-
-**Today: 1 pin for today's post. Queue 4 more across days 2–5.**
-
-**Critical context: the pin queue is additive, not replacing.** Every day this routine adds 5 future pins to the queue (1 fires today, 4 are scheduled for the next 4 days). At steady state — starting roughly day 5 — the queue is firing **5 pins per day across 5 different blog post URLs**: today's post (pin 1 of 5), yesterday's post (pin 2 of 5), the day before's (pin 3 of 5), and so on.
-
-This is the right Pinterest pattern. Established accounts (6+ months): 5-10 fresh pins daily. The top 1% of pins drive 50%+ of all traffic, so volume of distinct designs is how you increase your odds of going viral. 5 pins/day rotating across recent URLs lands in the recommended range and maximizes the chance one design hits.
-
-**Why not all 5 to today's URL today:** pinning multiple pins to the same URL on the same day triggers Pinterest's spam filters. The 24+ hour stagger across 5 days for each URL is what keeps the account clean.
-
-**Per-pin generation (for pin #1 fired today):**
-
-**First: check `inbox/pinterest-pins/` for pre-made pins.** Read all sidecar JSONs. Find matches by either `use_with_post_slug` matching today's post, or `topic`/`category` matching. If multiple inbox pins match, use the first one for today's pin #1 and queue the rest for days 2-5 (replacing slots that would otherwise be generated).
-
-If no inbox match for pin #1, generate fresh using the first angle from the hooks file:
-1. Compose the pin headline (8–12 words, scannable, keyword-rich, written for Pinterest search)
-2. Build the GPT Image 2 prompt using the Pinterest template in `assets/image-prompts/gpt-image-2-style-guide.md`
-3. Generate at 1000×1500 (2:3) with the headline as text overlay
-4. Compose the pin description: 200–500 chars, keyword-rich, written for Pinterest search not human reading
-5. Schedule for 9:00am Eastern today
-6. UTM tracking: `?utm_source=pinterest&utm_medium=social&utm_campaign=<post-slug>`
-
-For any inbox pin used: move file + sidecar to `inbox/used/<YYYY-MM>/` after scheduling, update sidecar with `used_in: <pin URL or scheduler ref>`.
-
-**Queue pins #2–5:**
-
-Write to `logs/pin-queue-<post-slug>.md` in YAML format (the `pinterest-queue-flush` routine reads this file daily and processes entries scheduled for today):
-
-```yaml
-source_post:
-  slug: <post-slug>
-  url: <full URL>
-  category: <category>
-  published_date: <today YYYY-MM-DD>
-
-pins:
-  - pin_number: 2
-    angle: <angle 2 from hooks file>
-    headline: <composed headline>
-    gpt_image_2_prompt: <full prompt ready to fire>
-    description: <composed description>
-    scheduled_date: <today + 1 day>
-    scheduled_time: "09:00 ET"
-    status: queued
-    fired_at: null
-    pin_url: null
-
-  - pin_number: 3
-    # ... same structure, scheduled_date = today + 2
-
-  - pin_number: 4
-    # ... scheduled_date = today + 3
-
-  - pin_number: 5
-    # ... scheduled_date = today + 4
+#### Instagram
+```json
+{
+  "accountIds": ["{GHL_IG_ACCOUNT_ID}"],
+  "userId": "{GHL_USER_ID}",
+  "summary": "{instagram caption with hashtags}",
+  "scheduleDate": "{utc_iso_8601_z}",
+  "status": "scheduled",
+  "type": "post",
+  "media": [{"url": "{square_image_url}", "type": "image/jpeg"}],
+  "followUpComment": "Link in bio for the full breakdown: {blog_url}"
+}
 ```
 
-The companion routine `pinterest-queue-flush.md` (fires daily at 8:45am) reads all `pin-queue-*.md` files, finds entries scheduled for today, generates the images using the queued prompts, posts via Pinterest API, and updates each entry's `status`, `fired_at`, and `pin_url`. **You do not need to handle pins #2-5 in this routine.** Just queue them properly.
+Note: Instagram `type` enum is `post|story|reel` (NOT `feed`). For feed posts, use `"type": "post"`.
 
-### 8. Schedule everything
+#### LinkedIn
+```json
+{
+  "accountIds": ["{GHL_LI_ACCOUNT_ID}"],
+  "userId": "{GHL_USER_ID}",
+  "summary": "{long-form native text post, no URL}",
+  "scheduleDate": "{utc_iso_8601_z}",
+  "status": "scheduled",
+  "type": "post",
+  "followUpComment": "Read the full breakdown: {blog_url}"
+}
+```
 
-| Platform | Method | Scheduled time |
-|---|---|---|
-| Facebook | Meta Graph API | 9:00am ET |
-| LinkedIn | LinkedIn API | 10:00am ET |
-| Instagram feed | Meta Graph API | 11:00am ET |
-| Instagram carousel | Meta Graph API | 2:00pm ET |
-| Pinterest pin #1 | Pinterest API | 9:00am ET today |
-| Pinterest pins #2-5 | Queued | 9am ET on next 4 days |
+LinkedIn does not require media. Text-only is the highest-performing format for finance content.
 
-If a platform API is unavailable, push to fallback scheduler (Metricool / Buffer / GHL social planner — set in environment) and log which required fallback.
+#### Pinterest (each pin)
+```json
+{
+  "accountIds": ["{GHL_PIN_ACCOUNT_ID}"],
+  "userId": "{GHL_USER_ID}",
+  "summary": "{pin description, ≤500 chars}",
+  "scheduleDate": "{utc_iso_8601_z}",
+  "status": "scheduled",
+  "type": "post",
+  "media": [{"url": "{vertical_image_url}", "type": "image/png"}],
+  "pinterestPostDetails": {
+    "boardIds": {"{GHL_PIN_OAUTH_ID}": "{numeric_board_id}"},
+    "title": "{pin title, ≤100 chars}",
+    "link": "{blog_url}"
+  }
+}
+```
 
-### 9. Log to Notion
+Pinterest `boardIds` is a map keyed by `oauthId` (not an array of board IDs). Use the OAuth ID from the vault.
 
-Create one page in the Operations Hub:
-- **Task:** `Social distribution complete: <post title>`
-- **Project:** `TCA`
-- **Status:** `Done`
-- **Type:** `Marketing`
-- **Owner:** `Claude`
-- **Priority:** `Medium`
+### 8. Capture post IDs and verify
+
+For each successful POST, capture the returned post `_id` (or `id`). Immediately call `GET /social-media-posting/{locationId}/posts/{id}` for each to verify:
+- `status` is `"scheduled"`
+- `scheduleDate` matches what was sent (round-trip check — confirms timezone behavior)
+- `accountIds` includes the right account
+
+If verification fails on any post, log High to Operations Hub with the post ID and what mismatched. Do not retry automatically — flag for human review.
+
+### 9. Failure handling — partial success
+
+If one platform's create call fails (e.g., IG rejects an image, LinkedIn returns 422 on a field), do **not** roll back the successful platforms. Log per-platform status to Operations Hub:
+
+- ✅ Facebook scheduled — post ID, scheduled time
+- ✅ LinkedIn scheduled — post ID, scheduled time
+- ❌ Instagram failed — error message, body sent (with credentials redacted)
+- ✅ Pinterest pins 1–5 scheduled
+
+Partial-success logging beats all-or-nothing. The failed platform gets a follow-up High task.
+
+### 10. Notion run log
+
+Write a single summary entry to Operations Hub:
+
+- **Title:** `daily-social-distribute {YYYY-MM-DD} — {N}/4 platforms scheduled`
+- **Project:** TCA
+- **Status:** Done (if all 4 succeeded), In Progress (if partial), or Blocked (if 0 succeeded)
+- **Priority:** Low (full success), Medium (partial), High (full failure)
+- **Type:** Marketing
+- **Owner:** Claude
 - **Notes:**
-  - Source post URL
-  - Per platform: scheduled time, post URL, link/standalone choice and why
-  - Today's per-platform mix used
-  - Carousel slide count and asset URLs
-  - Pinterest pin #1 details, queue file location for pins #2-5
-  - Any platforms that required fallback or failed
-- **Source Chat:** `daily-social-distribute routine — <date>`
+  - Source post: title, URL
+  - Per-platform: scheduled time, post ID
+  - Pinterest queue: 5 pins scheduled across {date range}
+  - Any failures with error messages
+  - Link to the social hooks file in the repo
 
-### 10. Send the daily summary
+### 11. Direct push to main
 
-To Slack `#tca-content-ops` (or email):
+The only repo write is the run log entry (none — Operations Hub absorbs the log). No commits required for this routine. If the run log ever moves into the repo, push direct to main per ROUTINES.md convention #2.
 
-```
-✅ Social routine complete — <date>
+### 12. Done
 
-Source: <blog post title>
-URL: <blog post URL>
-
-Distributed today:
-  ✅ Facebook (<link|standalone>) — scheduled 9:00am
-  ✅ LinkedIn (<link|standalone>) — scheduled 10:00am
-  ✅ Instagram feed — scheduled 11:00am
-  ✅ Instagram carousel (<N> slides) — scheduled 2:00pm
-  ✅ Pinterest — pin #1 of 5 for today's URL fired 9:00am
-  📋 Pinterest queue: 4 new pins added for this URL (days 2-5)
-
-Pinterest steady-state today: <N> pins firing across <N> URLs (today's + recent days')
-
-Issues: <none | list>
-Notion log: <URL>
-```
+Routine exits cleanly. No further action.
 
 ---
 
-## Failure modes
+## What this routine does NOT do
 
-| What fails | What to do |
+- **Comment management.** Replies happen on-platform.
+- **Engagement analytics.** Future `weekly-social-analytics` routine handles that.
+- **YouTube uploads.** Separate routine for Descript/Higgsfield video pipeline.
+- **TikTok / Threads / GBP / X.** Not in scope. Each platform that gets added in the future is a routine update + standards skill update, not a separate routine.
+- **Carousel posts.** Single image only for v1. Carousel is a future enhancement once we know what arc length actually performs.
+- **Recurring/evergreen posts.** UI-only feature. If recycling becomes valuable, that's a separate manual workflow.
+
+---
+
+## Failure mode reference
+
+| Failure | Behavior |
 |---|---|
-| Hooks file missing | Blog routine likely failed. Log Medium-priority Notion task. Exit. Don't invent. |
-| Skill loading fails | Log High-priority. Use built-in defaults from this file. |
-| Image API fails for one slide | Skip that slide, post carousel with remaining slides if 6+ remain. If <6, skip carousel for the day, log High priority. |
-| Image API fails for entire batch | Post text-only versions where supported (FB, LI). Skip IG (image-required). Log High. |
-| One platform API fails | Distribute to others. Log High-priority for failed platform. |
-| All platform APIs fail | Push everything to fallback scheduler. Log Critical. |
-| Carousel upload fails (Meta API) | Save slide images to Notion task, log High — Thomas can manually post. |
-| Pinterest pin queue write fails | Pin #1 still scheduled. Log High — pins #2-5 need manual scheduling. |
-| Notion logging fails | Send summary. Email Thomas about Notion separately. |
+| GHL token expired | Exit, log Critical, await manual reauth |
+| Token has insufficient scope | Exit, log Critical, await scope fix |
+| `status: "scheduled"` missing from body | Pre-flight assert fails — refuse to send, log Critical |
+| `scheduleDate` not UTC with Z | Pre-flight assert fails — refuse to send, log Critical |
+| `scheduleDate` <5 min out | Pre-flight assert fails — refuse to send, log Critical |
+| Social hooks file missing | Exit clean, log Low |
+| WP post not findable | Exit clean, log Low |
+| One platform's image fails | Skip that platform's image, post text where allowed |
+| One platform's create fails | Continue with other platforms, log per-platform |
+| All 4 platforms fail | Exit, log High to Operations Hub |
+| Verification round-trip mismatch | Continue (post is created), log High for review |
+| Pinterest board ID missing for pillar | Fall back to `GHL_PIN_BOARD_ID_FAMILY_FINANCIAL`, log Low |
 
 ---
 
-## What this routine never does
+## DST switchover
 
-- Distribute identical copy across platforms
-- Apply the same link/no-link rule to every platform
-- Invent content when no source post exists
-- Make recommendations or claims that weren't in the source post
-- Use advisory CTAs
-- Publish all 5 Pinterest pins to the same URL on the same day
-- Use 1080×1080 square for IG carousels (always 1080×1350 portrait)
-- Use anything other than 1000×1500 (2:3) for Pinterest
-- Use stock photos for IG carousels (designed slides only)
-- Crowd carousel slides with too much text (one idea per slide)
-- Use more than 3 hashtags on LinkedIn
+This routine's cron schedule is in UTC. When DST changes:
+- **Nov 1 2026** (EDT → EST): change cron from `30 12 * * *` to `30 13 * * *` to keep 8:30 AM ET execution
+- **Mar 8 2027** (EST → EDT): change back to `30 12 * * *`
+
+The schedule times *within* the routine (LinkedIn 7:30 AM ET etc.) are computed in code from "now in ET" + offset, so they auto-adjust with DST. Only the routine's own trigger cron needs manual adjustment.
+
+---
+
+## Reference
+
+- **API findings doc:** `docs/ghl-api-findings.md` — full schema reference, all confirmed field names, all gotchas
+- **Skill:** `tca-social-media-standards` — voice, copy structure, hashtag rules, per-platform standards
+- **Skill:** `tca-compliance-check` — pre-publish compliance gate
+- **Source data:** `logs/{YYYY-MM-DD}-social-hooks.md` — yesterday's blog distillation
+- **Sister routine:** `routines/blog-publish.md` — produces the social hooks file this routine consumes

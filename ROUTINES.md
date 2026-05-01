@@ -50,43 +50,25 @@ These apply to every routine in the system. New routines must follow these.
 
 | | |
 |---|---|
-| **Status** | Not yet built |
-| **Schedule** | Daily, 8:30 AM ET (cron `30 12 * * *` UTC during EDT) |
+| **Status** | Spec committed — routine not yet created (awaiting Phase 2 of build) |
+| **Schedule** | Daily, 8:30 AM ET (cron `30 12 * * *` UTC during EDT) — NOT YET ENABLED. Schedule activates after first manual test run succeeds. |
 | **Routine ID** | TBD |
 | **Source file** | `routines/social-distribute.md` |
-| **Connectors** | Notion only (social platform calls go via HTTPS API with vault credentials) |
+| **Connectors** | Notion only (GHL Social Planner calls go via HTTPS to `services.leadconnectorhq.com` with vault credentials) |
 | **Allowed tools** | Bash, Read, Write, Edit, Glob, Grep, WebFetch |
 
-**What it does:** Reads yesterday's blog post (now live on thomasclarkadvisor.com) and the corresponding `logs/YYYY-MM-DD-social-hooks.md` file. Adapts the post into platform-native content per `skills/tca-social-media-standards/SKILL.md`: Facebook post + image, Instagram carousel (8–10 slides) + feed image, LinkedIn post, Pinterest pin #1 of 5 (queues pins #2–5 for subsequent days), YouTube placeholder until video routine is live. Generates platform-specific images via GPT Image 2. Runs compliance check on each piece. Posts to each platform via their APIs.
+**What it does:** Reads yesterday's blog post (now live on thomasclarkadvisor.com) and the corresponding `logs/YYYY-MM-DD-social-hooks.md` file. Adapts the post into platform-native content per `skills/tca-social-media-standards/SKILL.md`: Facebook post + image, Instagram single feed image, LinkedIn long-form native text post, Pinterest pin #1 + queued pins #2–5 across the next 4 days. Schedules every post via the GHL Social Planner API (`POST /social-media-posting/{locationId}/posts` with `status: "scheduled"`). Pre-flight assertions enforce `status: "scheduled"`, UTC ISO 8601 with Z suffix, ≥5 min lead time, `userId`, and non-empty `accountIds` before any POST. Runs `tca-compliance-check` against all 4 primary posts and all 5 pins. Partial success is acceptable (one platform fails, others continue); rollback is not.
 
-**Inputs:** Yesterday's published WP post, social hooks file, voice/assets/skills.
-**Outputs:** Posted content on FB/IG/LI/Pinterest, queued Pinterest pins in `logs/pinterest-queue.json`, Notion run log.
+**Inputs:** Yesterday's published WP post, `logs/YYYY-MM-DD-social-hooks.md`, voice/assets/skills, GHL credentials from Notion vault.
+**Outputs:** 4 platform posts + 5 Pinterest pins scheduled in GHL Social Planner, Notion Operations Hub run log. No repo writes.
 
-**New credentials needed in vault:** `META_ACCESS_TOKEN`, `LINKEDIN_ACCESS_TOKEN`, `PINTEREST_ACCESS_TOKEN`.
+**Credentials in vault (already populated):** `GHL_API_KEY`, `GHL_LOCATION_ID`, `GHL_USER_ID`, `GHL_FB_ACCOUNT_ID`, `GHL_IG_ACCOUNT_ID`, `GHL_LI_ACCOUNT_ID`, `GHL_PIN_ACCOUNT_ID`, `GHL_PIN_OAUTH_ID`, `GHL_PIN_BOARD_ID_*` (5 boards).
+
+**Note:** This routine replaces the previously planned `daily-pinterest-queue-flush` routine. The 5-pin Pinterest queue is folded into this routine's single scheduled-API-calls flow rather than being a separate next-day flush.
 
 ---
 
-### 3. `daily-pinterest-queue-flush`
-
-| | |
-|---|---|
-| **Status** | Not yet built |
-| **Schedule** | Daily, 8:45 AM ET (cron `45 12 * * *` UTC during EDT) |
-| **Routine ID** | TBD |
-| **Source file** | `routines/pinterest-queue-flush.md` |
-| **Connectors** | Notion only |
-| **Allowed tools** | Bash, Read, Write, Edit, Glob, Grep, WebFetch |
-
-**What it does:** Reads `logs/pinterest-queue.json`, fires today's queued pins (4 from prior days, distributed across 5 rotating destination URLs). Steady state: ~5 pins/day. Logs which pins fired to Notion, removes them from the queue file, commits the updated queue back to the repo.
-
-**Inputs:** `logs/pinterest-queue.json`.
-**Outputs:** Posted Pinterest pins, updated queue file, Notion run log.
-
-**Credentials:** `PINTEREST_ACCESS_TOKEN` (shared with social-distribute).
-
----
-
-### 4. `weekly-newsletter-digest`
+### 3. `weekly-newsletter-digest`
 
 | | |
 |---|---|
