@@ -72,6 +72,58 @@ Required files:
 
 Do **not** distribute without both artifacts.
 
+## Format rotation by weekday
+
+The routine rotates LinkedIn and Instagram formats across the work week to (1) avoid algorithmic penalties from same-format-every-day patterns, (2) capture the engagement lift from carousel formats on Tue/Thu, and (3) match what high-performing accounts actually do — formats vary, theme stays consistent.
+
+Determine the weekday in ET (not UTC — the routine fires at 8:30 AM ET, after the date has rolled over locally).
+
+### LinkedIn rotation
+
+| Weekday | Format | Image required |
+|---|---|---|
+| Mon | Text + image (1.91:1 horizontal graphic) | Yes |
+| Tue | PDF carousel (8 slides — see step 6b below) | Yes — generates PDF |
+| Wed | Text-only (no image) | No |
+| Thu | PDF carousel (8 slides) | Yes — generates PDF |
+| Fri | Text + image (1.91:1) — use chart/data graphic if blog has stats, otherwise text-only | Optional |
+
+If the routine fires on a non-weekday (Sat/Sun), default to text-only LinkedIn — weekend distribution is lower-priority and the carousel pipeline cost isn't worth it.
+
+### Instagram rotation
+
+| Weekday | Format |
+|---|---|
+| Mon | Single image (square 1080×1080) |
+| Tue | Carousel (8 slides, square 1080×1080 each) |
+| Wed | Single image |
+| Thu | Carousel |
+| Fri | Single image |
+
+Sat/Sun default to single image.
+
+### Carousel days are coordinated
+
+Tue and Thu are "carousel days" on both LinkedIn and Instagram. The carousel arc from yesterday's social hooks file (`logs/{YYYY-MM-DD}-social-hooks.md` — already contains an 8-slide arc) is the source for both. Generate the slide IMAGES once (8× 1080×1080 PNGs) and use them two ways:
+- LinkedIn: stitch into a single PDF document upload
+- Instagram: post as multi-image carousel (8 separate media entries in the GHL post body)
+
+This produces visual consistency across platforms and saves on image gen API calls.
+
+### Visual consistency on carousel slides
+
+All carousel slides for a given day share template constraints enforced via the GPT Image 2 system prompt:
+- TCA brand colors (navy `#1a2947`, warm cream `#f7f1e3`, aged brass `#9c7a3c`)
+- Same header treatment across all 8 slides
+- Same footer credit (small "thomasclarkadvisor.com" mark)
+- Slide number indicator (1/8, 2/8, etc.) bottom-right
+- One central concept per slide, scannable in 3 seconds
+- Slide 1 = hook, slides 2–7 = supporting points, slide 8 = recap + CTA
+
+Reference the `gpt-image-2-director` skill for prompt structure but pass an explicit `system_prompt` enforcing the template constraints above.
+
+---
+
 ### 4. Adapt to platform-native copy
 
 For each platform, generate copy per the `tca-social-media-standards` skill. The social hooks file from yesterday already contains:
@@ -147,14 +199,72 @@ Note: routine social posts do **not** require the standard footer disclaimer per
 
 ### 6. Image preparation
 
-For each platform that needs an image (FB, IG, Pinterest):
+For each platform that needs an image (FB, IG, Pinterest, LinkedIn on image days):
 
 1. If reusing WP featured image: fetch the image URL directly. No upload needed — GHL accepts external URLs.
-2. If generating fresh: use GPT Image 2 via `gpt-image-2-director` skill, save to a public-accessible URL (WP media library or a CDN). Capture the MIME type from the generation step.
+2. **If generating fresh, use the primary→fallback chain (matches `routines/blog-publish.md`):**
+   - **Primary: OpenAI Images API** (`POST https://api.openai.com/v1/images/generations`) with model `gpt-image-2`. Auth via `OPENAI_API_KEY` from the vault. Org verification was completed 2026-05-01, so this path is now live and returns correct aspect ratios when `size` is passed explicitly.
+   - **Fallback: OpenRouter** (`POST https://openrouter.ai/api/v1/chat/completions`) with model `openai/gpt-5.4-image-2`, `modalities: ["image", "text"]`. Auth via `OPENROUTER_API_KEY`. Trigger this path on any OpenAI failure (rate limit, 5xx, network error, 403). The response shape differs — handle both.
+   - **Final fallback:** if both providers fail, skip the image and post text-only on platforms that allow it (FB, LinkedIn). For platforms that require media (IG, Pinterest), skip that platform's post and log a per-platform warning. Do not block the whole distribution.
+
+   Save generated images to a public-accessible URL (WP media library or a CDN). Capture the MIME type from the generation step.
 3. **Verify MIME type**: GHL requires `media[].type` to be a MIME type (`image/png`, `image/jpeg`), NOT a category like `image`. Default to `image/png` for GPT Image 2 output, `image/jpeg` for WP photo images.
 4. **Verify size limits**: FB 10MB, IG 8MB, LinkedIn 8MB, Pinterest 10MB.
+5. **Pass an explicit `size` parameter on every image-generation API call.** Per-platform sizes:
+   - **Pinterest pin (vertical 2:3):** `size: "1024x1536"`
+   - **Instagram square / carousel slide (1:1):** `size: "1024x1024"`
+   - **LinkedIn / Facebook horizontal (1.91:1):** `size: "1536x1024"`
+
+   > **Critical:** Pass `size` as an explicit API parameter on every image-gen call (both OpenAI's `gpt-image-2` `/v1/images/generations` body and OpenRouter's chat-completions body). Do NOT rely on prompt language to specify aspect ratio — the model ignores it. Confirmed during 2026-05-01 run: prompts asking for vertical 2:3 returned 1024×1024 squares because the size param was unset. If a provider rejects the size value (some only accept a fixed enum), use the closest supported value and document it in the run log.
 
 If image prep fails for one platform, post text-only on platforms that allow it (FB, LinkedIn) and skip IG/Pinterest with logged warnings. Do not block the whole distribution on one platform's image issue.
+
+### 6b. LinkedIn PDF carousel pipeline (Tue/Thu only)
+
+On Tue/Thu, after generating the 8 carousel slide images:
+
+1. **Stitch slides into a single PDF** using `img2pdf` (Python): one PDF, 8 pages, slides in order, no compression that loses readability.
+2. **Upload PDF to GHL media** via `POST /medias/upload-file` with `type: "application/pdf"`. Capture returned media ID and public URL.
+3. **Create LinkedIn post** with the PDF as the media reference. Best-guess body shape (verify against findings doc):
+
+```json
+{
+  "accountIds": ["{GHL_LI_ACCOUNT_ID}"],
+  "userId": "{GHL_USER_ID}",
+  "summary": "{LinkedIn carousel caption — 1,300-1,600 chars per the spec}",
+  "scheduleDate": "{utc_iso_8601_z}",
+  "status": "scheduled",
+  "type": "post",
+  "media": [{"url": "{pdf_url}", "type": "application/pdf"}],
+  "followUpComment": "Read the full breakdown: {blog_url}"
+}
+```
+
+#### Fallback chain (LinkedIn carousel days only)
+
+If the PDF carousel path fails at any step, fall through:
+
+1. **PDF upload to GHL fails** → fall to step 2
+2. **PDF post create rejects (e.g., 422 on `application/pdf` MIME)** → fall to step 2
+3. **Step 2: Multi-image post** — try posting the 8 slide images as a multi-image LinkedIn post (`media: [...]` with all 8 image entries). LinkedIn still supports multi-image posts even though native carousels were deprecated.
+4. **Multi-image fails** → fall to step 3
+5. **Step 3: Single image post** — use slide 1 as a teaser image with a "8-slide breakdown coming — what would you want to see covered?" caption.
+6. **Single image fails** → fall to step 4
+7. **Step 4: Text-only post** — post just the LinkedIn copy from yesterday's hooks file with no media.
+
+Log every fallback step to Operations Hub with severity Medium so we can track which path actually fires over time. After 2–3 weeks of data we'll know which path GHL+LinkedIn supports reliably and can simplify the chain.
+
+#### Pre-flight PDF test (one-time, before first Tuesday run)
+
+The first Tuesday after schedule activation, the routine should run an **internal pre-flight check** before the main pipeline:
+
+1. Generate a 3-slide dummy PDF (slides labeled "PRE-FLIGHT TEST 1/3" etc.)
+2. Upload to GHL media
+3. Attempt a LinkedIn POST with `status: "scheduled"`, scheduled 1 hour out
+4. If POST returns success → immediately DELETE the test post, log success to Ops Hub, proceed with real pipeline
+5. If POST returns 422 or rejects PDF MIME → log Critical to Ops Hub with the exact error, fall straight to step 2 (multi-image) for the day's actual carousel, and update this spec section based on the error before next Tuesday
+
+Track the pre-flight outcome in a flag file in the repo: `state/linkedin-pdf-supported.json` with `{"supported": true|false, "tested_at": "..."}`. Subsequent Tuesdays read this flag and skip the pre-flight if already verified. If the flag says unsupported, skip PDF entirely and go straight to multi-image fallback.
 
 ### 7. Schedule posts via GHL API
 
@@ -187,6 +297,8 @@ Any assertion fails → log Critical, exit. Do not POST. The `status: "scheduled
 | Pinterest pin #5 | +4 days 8:00 PM | |
 
 **Per-platform body shape (confirmed via API surface test 2026-05-01 — see `docs/ghl-api-findings.md` for full schema):**
+
+> The shapes below cover the non-carousel days (Mon/Wed/Fri/Sat/Sun). On **carousel days (Tue/Thu)**, LinkedIn uses the PDF body shape from step 6b and Instagram uses a multi-image media array (8 entries instead of 1). Apply the weekday rotation rules from "Format rotation by weekday" before assembling these bodies.
 
 #### Facebook
 ```json
@@ -327,6 +439,9 @@ Routine exits cleanly. No further action.
 | All 4 platforms fail | Exit, log High to Operations Hub |
 | Verification round-trip mismatch | Continue (post is created), log High for review |
 | Pinterest board ID missing for pillar | Fall back to `GHL_PIN_BOARD_ID_FAMILY_FINANCIAL`, log Low |
+| LinkedIn PDF upload fails (Tue/Thu) | Fall to multi-image, then single image, then text-only. Log Medium per fallback step. |
+| Carousel slide generation partial fail | If 6+ slides generated, proceed with what we have. If <6, fall to single image for IG and text-only for LinkedIn. |
+| Pre-flight PDF test fails | Log Critical, set state flag to unsupported, route Tuesday/Thursday LinkedIn to multi-image permanently until manual review. |
 
 ---
 
