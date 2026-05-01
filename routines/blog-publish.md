@@ -119,6 +119,20 @@ pinterest_angles:
 
 This file is the single source of truth the social routine consumes. Don't make the social routine re-read the full blog post — it's slower, costs more tokens, and risks drift between blog and social.
 
+### 4.5. Commit the social hooks file to main
+
+The next-day `daily-social-distribute` routine clones a fresh copy of the repo at run time and reads `logs/<date>-social-hooks.md` from main. If the file isn't on main, social-distribute won't see it.
+
+```bash
+git add logs/<date>-social-hooks.md
+git commit -m "logs: <date> social-distribute handoff (post <wp_post_id>)"
+git push origin main
+```
+
+**Push directly to main.** Do not create a feature branch, do not open a PR. Per `CLAUDE.md` → Routine architecture, every routine that writes back to the repo follows this pattern: `git add` → `git commit` → `git push origin main`. The "Allow unrestricted git push" permission on this routine grants direct-push access.
+
+If git push fails: retry once. If still failing, log Critical Notion task with the file path and error — the social handoff is downstream-blocking. Do not skip this step.
+
 ### 5. Generate images
 
 **First: check `inbox/blog-images/` for pre-made assets matching today's post.**
@@ -202,7 +216,7 @@ Issues: <none | list>
 | What fails | What to do |
 |---|---|
 | Web search returns nothing useful | Pivot to evergreen angle on same category. Don't skip the day. |
-| Image API fails or rate limits | Publish without images. Log a Notion task. |
+| OpenAI image API fails (incl. 403 org-not-verified, rate limit, 5xx) | Fall back to OpenRouter `openai/gpt-5.4-image-2`. If OpenRouter also fails, publish without images and log a Critical Notion task. Never block the publish. |
 | WordPress media upload fails | Retry once. If fails, publish without images and log. |
 | WordPress post creation fails | Stop. Log Critical Notion task with full draft. |
 | Compliance check returns FAIL_BLOCK | Stop. Log Critical Notion task with full draft + findings. |

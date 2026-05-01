@@ -12,6 +12,22 @@ All four share the context, voice, and compliance posture defined here. Routine-
 
 ---
 
+## Routine architecture
+
+Conventions all four routines follow.
+
+**Credentials live in the Notion vault.** No credentials in the repo, no env vars on the routine config. Each routine fetches credentials at runtime by searching Notion for a private page titled exactly `Routine Vault — Credentials` and parsing the fenced code block on that page. Hold credentials in memory only — never write them to the repo, `logs/`, run summaries, or other Notion pages. See `SECRETS.md` for which keys each routine needs and how to refresh them.
+
+**Routines commit directly to `main`.** No feature branches, no PRs, no merge steps. Pattern: `git add <files>` → `git commit -m "..."` → `git push origin main`. The "Allow unrestricted git push" toggle on each routine's Permissions tab grants this access. Apply this pattern in every routine that writes back to the repo (social hooks file, Pinterest queue, newsletter archive, etc.).
+
+**Image generation: OpenAI primary, OpenRouter fallback.** Default to OpenAI `gpt-image-2` at `/v1/images/generations` (requires org verification on the OpenAI account — without it the API returns 403 `organization-must-be-verified`). On failure, fall back to OpenRouter using model `openai/gpt-5.4-image-2` against `/api/v1/chat/completions` with `modalities: ["image", "text"]` (verified working 2026-05-01). If both fail: publish without images, log a Critical Notion task, never block the publish.
+
+**Notion Operations Hub is the run log.** Every routine writes a run-summary task to Operations Hub (data source ID `c96ec729-0d1f-4eb3-a88a-bf1e586b4dfe`). Failures and follow-ups also write Critical/High-priority tasks.
+
+**Network egress.** Routines run in the cloud environment whose tier is set to `full` (not `trusted`). The `trusted` tier's restricted allowlist does not have outbound access to `thomasclarkadvisor.com`, `api.openai.com`, or `openrouter.ai`. MCP traffic (Notion) is unaffected by tier.
+
+---
+
 ## CRITICAL: Load TCA skills before doing anything
 
 Before drafting any content, every routine MUST load Thomas's TCA-specific skills. These skills encode hard-won decisions about voice, compliance, and platform strategy that override any general best practices the model might default to.
@@ -144,8 +160,8 @@ Default day-of-week rotation if `content-calendar.md` doesn't override:
 
 ## Tools and connectors available to routines
 
-- **WordPress REST API** — `https://thomasclarkadvisor.com/wp-json/wp/v2/` with application password auth (credentials in environment)
-- **OpenAI API** — for GPT Image 2 image generation (`gpt-image-2`)
+- **WordPress REST API** — `https://thomasclarkadvisor.com/wp-json/wp/v2/` with application password auth (credentials fetched from Notion vault at runtime — see Routine architecture above)
+- **OpenAI API** — for GPT Image 2 image generation (`gpt-image-2`), with OpenRouter fallback `openai/gpt-5.4-image-2` per Routine architecture
 - **Notion MCP** — Operations Hub database for logging
   - Database ID: `a71e9baf-21ba-4605-bd22-9b2e1f21ce16`
   - Data source ID for create-pages: `c96ec729-0d1f-4eb3-a88a-bf1e586b4dfe`
