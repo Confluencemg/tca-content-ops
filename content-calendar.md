@@ -116,7 +116,9 @@ These are partly evergreen, partly week-of-publication. Routine should check the
 7. The HSA as a retirement account — the triple tax advantage explained
 8. Paying off the mortgage in retirement — the actual math behind the decision
 9. Estate basics — wills, beneficiary designations, and the hierarchy of who gets what
-10. Why your beneficiary designations are more important than your will
+
+#### Consumed
+- Why your beneficiary designations are more important than your will — published 2026-05-02 (post 739, Mother's Day seasonal driver)
 
 ### Trading & Markets (queue — deferred, monthly cadence)
 
