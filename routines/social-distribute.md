@@ -344,12 +344,23 @@ assert(Array.isArray(body.accountIds) && body.accountIds.length > 0);
 
 Any assertion fails → log Critical, exit. Do not POST. The `status: "scheduled"` check is non-negotiable — without it, the post publishes immediately and creates the same kind of rogue post we hit during the API surface test.
 
+**Per-platform retry behavior on 4xx errors (mandatory — prevents duplicate-post storms):**
+
+If a single platform's POST returns a 4xx error (422, 400, etc.):
+
+1. **Retry ONLY that platform's call** with the corrective body change. Do NOT re-execute Step 7 from the top. Do NOT re-run image generation. Do NOT re-call any platform that already returned 2xx.
+2. Apply the corrective change in-place (e.g., add a missing `media: []`, fix a MIME type, adjust a `type` enum) and re-POST that single platform's body.
+3. If the same platform fails again on the second attempt, log High to Operations Hub for that platform only, mark it failed in the per-platform status, and continue with the remaining platforms. Do not retry a third time.
+4. **Never re-enter Step 7 in a loop.** A single platform's retry is bounded to one extra attempt. Re-running the whole scheduling block on a 4xx is the documented cause of the 2026-05-02 duplicate FB/IG/LI posts: the LinkedIn 422 (missing `media: []`, since fixed in this spec) cascaded into a full re-execution that re-created posts on the platforms that had already succeeded.
+
+The Step 2.5 idempotency check defends against re-trigger paths originating outside this routine. This rule defends against re-trigger paths originating *inside* this routine.
+
 **Schedule times (all converted to UTC ISO 8601 with Z suffix before sending):**
 
 | Platform | Local time (ET) | Notes |
 |---|---|---|
-| LinkedIn | 7:30 AM | Highest engagement window for B2B finance content |
 | Facebook | 9:00 AM | After commute, before mid-morning lull |
+| LinkedIn | 10:00 AM | B2B finance engagement window AND structurally reachable from the 8:30 AM ET routine fire (the prior 7:30 AM target was always in the past, forcing every run into a same-day reschedule). |
 | Instagram | 11:00 AM | Late-morning scroll window |
 | Pinterest pin #1 | 8:00 PM | Pinterest evening pattern |
 | Pinterest pin #2 | tomorrow 8:00 PM | |
@@ -400,11 +411,12 @@ Note: Instagram `type` enum is `post|story|reel` (NOT `feed`). For feed posts, u
   "scheduleDate": "{utc_iso_8601_z}",
   "status": "scheduled",
   "type": "post",
+  "media": [],
   "followUpComment": "Read the full breakdown: {blog_url}"
 }
 ```
 
-LinkedIn does not require media. Text-only is the highest-performing format for finance content.
+LinkedIn does not require *content* in media, but the `media` field itself is mandatory on every create. Omitting it returns 422 `"media must be an array with media objects or an empty array"` (confirmed during the 2026-05-02 autonomous run). Send `media: []` for text-only posts. Text-only is the highest-performing format for finance content.
 
 #### Pinterest (each pin)
 ```json
@@ -514,7 +526,7 @@ This routine's cron schedule is in UTC. When DST changes:
 - **Nov 1 2026** (EDT → EST): change cron from `30 12 * * *` to `30 13 * * *` to keep 8:30 AM ET execution
 - **Mar 8 2027** (EST → EDT): change back to `30 12 * * *`
 
-The schedule times *within* the routine (LinkedIn 7:30 AM ET etc.) are computed in code from "now in ET" + offset, so they auto-adjust with DST. Only the routine's own trigger cron needs manual adjustment.
+The schedule times *within* the routine (LinkedIn 10:00 AM ET etc.) are computed in code from "now in ET" + offset, so they auto-adjust with DST. Only the routine's own trigger cron needs manual adjustment.
 
 ---
 
