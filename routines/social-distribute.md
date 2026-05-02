@@ -58,6 +58,67 @@ If any required credential is missing, exit clean and log Critical to Operations
 
 Clone or pull latest `main` from `github.com/Confluencemg/tca-content-ops` to a working directory.
 
+### 2.5 Idempotency check (mandatory — runs before any other work)
+
+This routine must be safe to invoke more than once per day. The cron fires once at 8:30 AM ET, but other paths can re-trigger it: a manual re-run during a Cowork or chat session, an Anthropic environment retry after a perceived failure, or a one-off Cowork task that uses the same prompt instead of read-only verification calls. Every re-trigger creates a parallel set of FB/IG/LI posts and a parallel Pinterest queue against the same source — confirmed observed on 2026-05-02 (one autonomous run at 8:53 AM ET, second run at ~11:00 AM ET when a Cowork verification task fired late after the user's Mac came online).
+
+The check is the FIRST API call this routine makes — before locating yesterday's artifacts, before image gen, before any copy work.
+
+**Compute yesterday's date in ET** (same convention as Step 3) to know what hooks file would be the source for today's distribution. Use `logs/{yesterday}-social-hooks.md` and read just the `post_url` field from the YAML front matter (do not load the full file yet).
+
+**Query GHL for posts created in the last 24 hours by this routine:**
+
+```
+POST /social-media-posting/{locationId}/posts/list
+Body:
+{
+  "type": "scheduled",
+  "limit": "100",
+  "skip": "0",
+  "fromDate": "{now_utc - 24h}",
+  "toDate": "{now_utc + 14d}"
+}
+```
+
+Also pull the `published` feed for the same window so we don't miss posts that have already fired today:
+
+```
+POST /social-media-posting/{locationId}/posts/list
+Body: same as above but "type": "published" and "fromDate": "{today 00:00 UTC}"
+```
+
+**Decision:**
+
+For each post in the combined results, check whether ANY of the following match yesterday's source:
+
+1. `pinterestPostDetails.link` contains yesterday's blog slug (Pinterest pins always link back to the blog URL with UTM params)
+2. `summary` contains the yesterday's blog title (case-insensitive) OR
+3. `summary` contains the yesterday's blog title's first 6 words (catches truncated/reworded copy that came from the same hooks file)
+
+If ANY matching post exists AND its `createdBy` equals `GHL_USER_ID` from the vault → **exit clean.** Log a single Medium task to Operations Hub:
+
+- **Title:** `daily-social-distribute {YYYY-MM-DD} — no-op (already distributed)`
+- **Project:** TCA
+- **Status:** Done
+- **Priority:** Medium
+- **Type:** Marketing
+- **Owner:** Claude
+- **Notes:**
+  - Existing distribution detected for source: `{yesterday's blog title}`
+  - Earliest matching post created at `{createdAt}` (post ID `{_id}`)
+  - This run was a re-trigger (manual, Cowork late-fire, or environment retry) — exited without scheduling new posts
+  - Full match list: `{count} matching posts across {N} platforms`
+
+If NO matching posts exist → proceed normally to Step 3.
+
+**Why the 24-hour window:** Today's autonomous cron run will create posts within seconds of starting. A second run hours later (e.g., a delayed Cowork task) will see those posts in the scheduled feed and exit. A run on a fresh day will find no matches and proceed. The window must be at least 24h to cover delayed Cowork-style fires.
+
+**Why match by source URL/title, not by today's date:** A re-trigger could happen seconds after the original run with both posts having the same `createdAt`. Matching by source content is more reliable than matching by timestamp.
+
+**Why Pinterest is the most reliable signal:** Pinterest pins always include `pinterestPostDetails.link` with the destination URL — easy unambiguous match. FB/IG/LI summaries are platform-adapted copy and may not contain the exact blog title verbatim. Check Pinterest first; fall back to summary text matching if no Pinterest pins are found.
+
+**Failure handling on the idempotency query itself:** If the GHL list call returns 5xx or times out, log High to Operations Hub and **exit without scheduling.** Do not assume "no matches found" if we couldn't actually check. Better to skip a day than to double-post.
+
 ### 3. Locate yesterday's artifacts
 
 Compute yesterday's date in ET (not UTC — the blog's filename convention is local-day-based).
@@ -427,6 +488,8 @@ Routine exits cleanly. No further action.
 
 | Failure | Behavior |
 |---|---|
+| Idempotency check finds existing distribution | Exit clean, log Medium "no-op (already distributed)". Do not schedule. |
+| Idempotency query itself fails (5xx, timeout) | Exit, log High. Do NOT assume zero matches. Better to skip a day than double-post. |
 | GHL token expired | Exit, log Critical, await manual reauth |
 | Token has insufficient scope | Exit, log Critical, await scope fix |
 | `status: "scheduled"` missing from body | Pre-flight assert fails — refuse to send, log Critical |
