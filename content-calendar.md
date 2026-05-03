@@ -79,16 +79,18 @@ This is the rolling list. The routine consumes from the top, marks consumed, and
 
 ### Bucket Planning (queue)
 
-1. Now / Soon / Later — the full framework explained for the first-time reader
-2. Sizing the Soon bucket — how to think about your income floor target
-3. The Later bucket and risk tolerance — getting the growth allocation right
-4. Refilling the Now bucket — quarterly, annually, or when triggered?
-5. Why the bucket strategy beats the systematic withdrawal approach for most retirees
-6. Bucket planning with a pension — how the math changes
-7. Bucket planning without a pension — building the income floor from scratch
-8. Bucket planning and Social Security delay — the bridge years problem
-9. Tax-aware bucketing — putting the right account types in the right buckets
-10. Bucket planning vs. the three-fund portfolio — why both can be right
+1. Sizing the Soon bucket — how to think about your income floor target
+2. The Later bucket and risk tolerance — getting the growth allocation right
+3. Refilling the Now bucket — quarterly, annually, or when triggered?
+4. Why the bucket strategy beats the systematic withdrawal approach for most retirees
+5. Bucket planning with a pension — how the math changes
+6. Bucket planning without a pension — building the income floor from scratch
+7. Bucket planning and Social Security delay — the bridge years problem
+8. Tax-aware bucketing — putting the right account types in the right buckets
+9. Bucket planning vs. the three-fund portfolio — why both can be right
+
+#### Consumed
+- Now / Soon / Later — the full framework explained for the first-time reader — published 2026-05-03 (post 749, foundational pillar piece, 14+ day Bucket Planning gap filler)
 
 ### Market Insights (queue)
 
